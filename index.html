@@ -163,10 +163,14 @@
   }
   .lane-foot button:hover { border-color: var(--accent-dim); }
 
-  /* Transport */
+  /* Transport — pinned to the top above the videos */
   .transport {
-    margin-top: 20px;
-    background: var(--panel);
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    margin-bottom: 20px;
+    background: rgba(22, 27, 34, 0.96);
+    backdrop-filter: blur(8px);
     border: 1px solid var(--border);
     border-radius: 12px;
     padding: 14px 16px;
@@ -314,6 +318,31 @@
   .flaw .when { font-size: 11px; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
   .clean { font-size: 13px; color: var(--accent); }
   .disclaimer { font-size: 11px; color: var(--muted); margin-top: 10px; line-height: 1.4; }
+
+  /* Comparison panel */
+  .compare { margin-top: 22px; }
+  .compare-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .compare-card h3 { margin: 0 0 14px; font-size: 15px; }
+  .cmp-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .cmp-table th, .cmp-table td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  .cmp-table th { color: var(--muted); font-weight: 600; }
+  .cmp-table td.metric { color: var(--muted); white-space: nowrap; }
+  .cmp-table .val { font-variant-numeric: tabular-nums; }
+  .cmp-table .better { color: var(--accent); font-weight: 600; }
+  .cmp-flaw { display: inline-block; margin: 2px 6px 2px 0; font-size: 12px; }
+  .cmp-flaw .dotc { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+  .cmp-none { color: var(--accent); font-size: 12px; }
+  .cmp-shared { color: var(--muted); font-size: 12px; margin-top: 10px; }
 </style>
 </head>
 <body>
@@ -323,6 +352,49 @@
 </header>
 
 <main>
+  <div class="transport" id="transport">
+    <div class="scrub-wrap">
+      <input type="range" id="scrubber" min="0" max="1000" value="0" step="1" disabled />
+      <span class="time" id="timeReadout">0:00.0 / 0:00.0</span>
+    </div>
+    <div class="transport-row">
+      <button class="btn icon" id="restartBtn" title="Restart (Home)" disabled>⟲</button>
+      <button class="btn primary icon" id="playBtn" title="Play / Pause (Space)" disabled>▶</button>
+      <div class="group">
+        <span class="glabel">Step</span>
+        <button class="btn icon" id="stepBack" title="Previous frame (←)" disabled>◀|</button>
+        <button class="btn icon" id="stepFwd" title="Next frame (→)" disabled>|▶</button>
+      </div>
+      <div class="group">
+        <span class="glabel">View</span>
+        <button class="speed-btn active" data-view="both">Both</button>
+        <button class="speed-btn" data-view="A" disabled>Swing A</button>
+        <button class="speed-btn" data-view="B" disabled>Swing B</button>
+      </div>
+      <div class="group">
+        <span class="glabel">Speed</span>
+        <button class="speed-btn" data-speed="0.25">0.25×</button>
+        <button class="speed-btn" data-speed="0.5">0.5×</button>
+        <button class="speed-btn active" data-speed="1">1×</button>
+      </div>
+      <div class="group">
+        <span class="glabel">Pose</span>
+        <button class="speed-btn" id="overlayToggle" aria-pressed="false" title="Show/hide the body-tracking skeleton drawn over the video" disabled>Skeleton</button>
+        <span id="poseStatus" class="pose-status">loading pose model…</span>
+      </div>
+      <div class="group">
+        <span class="glabel">Analyze</span>
+        <select id="handedness" class="select" title="Golfer handedness">
+          <option value="R">Right-handed</option>
+          <option value="L">Left-handed</option>
+        </select>
+        <button class="btn" id="analyzeBtn" disabled>Detect flaws</button>
+        <button class="btn" id="compareBtn" disabled title="Analyze both swings and compare them side by side">Compare swings</button>
+        <span id="analyzeStatus" class="pose-status"></span>
+      </div>
+    </div>
+  </div>
+
   <div class="lanes">
     <!-- Lane A -->
     <section class="lane" data-lane="A">
@@ -369,48 +441,6 @@
     </section>
   </div>
 
-  <div class="transport">
-    <div class="scrub-wrap">
-      <input type="range" id="scrubber" min="0" max="1000" value="0" step="1" disabled />
-      <span class="time" id="timeReadout">0:00.0 / 0:00.0</span>
-    </div>
-    <div class="transport-row">
-      <button class="btn icon" id="restartBtn" title="Restart (Home)" disabled>⟲</button>
-      <button class="btn primary icon" id="playBtn" title="Play / Pause (Space)" disabled>▶</button>
-      <div class="group">
-        <span class="glabel">Step</span>
-        <button class="btn icon" id="stepBack" title="Previous frame (←)" disabled>◀|</button>
-        <button class="btn icon" id="stepFwd" title="Next frame (→)" disabled>|▶</button>
-      </div>
-      <div class="group">
-        <span class="glabel">View</span>
-        <button class="speed-btn active" data-view="both">Both</button>
-        <button class="speed-btn" data-view="A" disabled>Swing A</button>
-        <button class="speed-btn" data-view="B" disabled>Swing B</button>
-      </div>
-      <div class="group">
-        <span class="glabel">Speed</span>
-        <button class="speed-btn" data-speed="0.25">0.25×</button>
-        <button class="speed-btn" data-speed="0.5">0.5×</button>
-        <button class="speed-btn active" data-speed="1">1×</button>
-      </div>
-      <div class="group">
-        <span class="glabel">Pose</span>
-        <button class="speed-btn" id="overlayToggle" aria-pressed="false" title="Show/hide the body-tracking skeleton drawn over the video" disabled>Skeleton</button>
-        <span id="poseStatus" class="pose-status">loading pose model…</span>
-      </div>
-      <div class="group">
-        <span class="glabel">Analyze</span>
-        <select id="handedness" class="select" title="Golfer handedness">
-          <option value="R">Right-handed</option>
-          <option value="L">Left-handed</option>
-        </select>
-        <button class="btn" id="analyzeBtn" disabled>Detect flaws</button>
-        <span id="analyzeStatus" class="pose-status"></span>
-      </div>
-    </div>
-  </div>
-
   <div class="legend">
     <span><kbd>Space</kbd> play / pause</span>
     <span><kbd>←</kbd> <kbd>→</kbd> step one frame</span>
@@ -419,8 +449,10 @@
   </div>
 
   <div class="roadmap">
-    <b>Skeleton:</b> the green overlay tracks your body joints (wrists, elbows, shoulders, hips &amp; knees highlighted) live as the video plays or steps — toggle it with the <b>Skeleton</b> button. <b>View:</b> switch to a single swing for a bigger picture. <b>Detect flaws</b> scans each loaded swing for common faults — click a finding to jump straight to it and light up the offending joint in red.
+    <b>Skeleton:</b> the green overlay tracks your body joints (wrists, elbows, shoulders, hips &amp; knees highlighted) live as the video plays or steps — toggle it with the <b>Skeleton</b> button. <b>View:</b> switch to a single swing for a bigger picture. <b>Detect flaws</b> scans each loaded swing for ~16 common faults (overswing, over-the-top, early extension, sway, reverse pivot, head movement, casting-arm flaws, tempo &amp; more) — click a finding to jump to it and light up the offending joint in red. <b>Compare swings</b> analyzes both and lines them up side by side from address.
   </div>
+
+  <div class="compare" id="compare"></div>
 
   <div class="results" id="results"></div>
 </main>
@@ -564,14 +596,19 @@ function setFocus(view) {
 function play() {
   const ls = controlLanes();
   if (!ls.length) return;
+  // When comparing both swings, keep them in lock-step: if either clip has
+  // finished or the two have drifted apart, rewind both to the start so they
+  // always play together from the beginning.
+  if (ls.length > 1) {
+    const ended = ls.some(l => l.video.ended || l.video.currentTime >= (l.video.duration - 0.05));
+    const times = ls.map(l => l.video.currentTime);
+    const drift = Math.max(...times) - Math.min(...times);
+    if (ended || drift > 0.15) ls.forEach(l => l.video.currentTime = 0);
+  }
   playing = true;
   playBtn.textContent = '❚❚';
   ls.forEach(l => {
     l.video.playbackRate = speed;
-    // restart a lane that already reached its end
-    if (l.video.ended || l.video.currentTime >= (l.video.duration - 0.001)) {
-      // only rewind if all are at the end; otherwise keep relative positions
-    }
     l.video.play().catch(() => {});
   });
 }
@@ -857,15 +894,18 @@ overlayToggle.addEventListener('click', () => { if (poseReady) setOverlay(!overl
 
 // ---- Phase 3: swing analysis & flaw detection -------------------------------
 const analyzeBtn = document.getElementById('analyzeBtn');
+const compareBtn = document.getElementById('compareBtn');
 const analyzeStatus = document.getElementById('analyzeStatus');
 const handednessSel = document.getElementById('handedness');
 const resultsEl = document.getElementById('results');
+const compareEl = document.getElementById('compare');
 
 let analysisLandmarker = null; // IMAGE mode, created lazily, shared (analysis is sequential)
 let analyzing = false;
 
 function refreshAnalyzeBtn() {
   analyzeBtn.disabled = analyzing || !poseReady || loadedLanes().length === 0;
+  compareBtn.disabled = analyzing || !poseReady || loadedLanes().length < 2;
 }
 
 // --- geometry helpers ---
@@ -935,6 +975,7 @@ async function analyzeAll() {
   analyzeStatus.textContent = 'done';
   analyzing = false;
   refreshAnalyzeBtn();
+  if (compareEl.children.length) renderCompare();
   if (!overlayOn) setOverlay(true);
 }
 
@@ -996,107 +1037,181 @@ function detectEvents(frames) {
 }
 
 // --- flaw heuristics (pose-based estimates; the club itself isn't tracked) ---
+// Anatomical landmark groups for the lead (target-side) and trail sides.
+const SIDE = {
+  R: { lead: { sh: 11, el: 13, wr: 15, hip: 23, knee: 25, ank: 27 },
+       trail:{ sh: 12, el: 14, wr: 16, hip: 24, knee: 26, ank: 28 } },
+  L: { lead: { sh: 12, el: 14, wr: 16, hip: 24, knee: 26, ank: 28 },
+       trail:{ sh: 11, el: 13, wr: 15, hip: 23, knee: 25, ank: 27 } },
+};
+
 function detectFlaws(lane) {
   const frames = lane.frames, ev = lane.events;
   if (!ev) return [];
   const flaws = [];
-  const lead = handednessSel.value === 'L'
-    ? { sh: 12, el: 14, wr: 16 }   // left-handed → lead is anatomical right
-    : { sh: 11, el: 13, wr: 15 };  // right-handed → lead is anatomical left
+  const sides = SIDE[handednessSel.value === 'L' ? 'L' : 'R'];
+  const lead = sides.lead, trail = sides.trail;
 
   const at = (e) => frames[e.idx].lm;
   const lmA = at(ev.address), lmT = at(ev.top), lmI = at(ev.impact), lmF = at(ev.follow);
+  const handMid = (lm) => mid(lm[15], lm[16]);
+  const hip = (lm) => mid(lm[23], lm[24]);
+  const sho = (lm) => mid(lm[11], lm[12]);
+  const scA = bodyScale(lmA), scT = bodyScale(lmT), scI = bodyScale(lmI), scF = bodyScale(lmF);
 
-  // 1) Club past parallel at top — proxy: hands rise above the head.
+  // Through-swing target direction, inferred from where the hands travel from
+  // the top into the follow-through (camera-agnostic sign).
+  let targetDir = Math.sign(handMid(lmF).x - handMid(lmT).x);
+  if (!targetDir) targetDir = Math.sign(handMid(lmI).x - handMid(lmT).x) || 1;
+
+  const add = (f) => flaws.push(f);
+
+  // 1) Overswing / club past parallel — hands climb above head height at the top.
   if (vis(lmT, 15) && vis(lmT, 16) && vis(lmT, 0)) {
-    const handT = mid(lmT[15], lmT[16]);
-    const overHead = lmT[0].y - handT.y; // positive when hands above the nose
-    if (overHead > 0.02) {
-      flaws.push({
-        id: 'past-parallel',
-        name: 'Club likely past parallel at top',
-        detail: 'Hands swung up above head height at the top — a sign of an overswing / shaft past parallel.',
-        t: ev.top.t,
-        joints: [lead.wr, lead.el, 15, 16],
-        severity: overHead > 0.08 ? 'high' : 'med',
-      });
-    }
+    const overHead = (lmT[0].y - handMid(lmT).y) / scT;
+    if (overHead > 0.05) add({ id: 'past-parallel', name: 'Club past parallel at top',
+      detail: 'Hands swung above head height at the top — a sign of an overswing / shaft past parallel.',
+      t: ev.top.t, joints: [lead.wr, lead.el, 15, 16], severity: overHead > 0.25 ? 'high' : 'med' });
   }
 
-  // 2) Over-the-top downswing — proxy: hands move toward the target side early in the downswing.
+  // 2) Over-the-top transition — hands thrown outward toward the target line early.
   if (frames.length > ev.top.idx + 2) {
-    const handT = mid(lmT[15], lmT[16]);
-    const handI = mid(lmI[15], lmI[16]);
+    const handT = handMid(lmT), handI = handMid(lmI);
     const eIdx = Math.min(frames.length - 1, ev.top.idx + Math.max(1, Math.round((ev.impact.idx - ev.top.idx) * 0.3)));
-    const handE = mid(frames[eIdx].lm[15], frames[eIdx].lm[16]);
-    const targetDir = Math.sign(handI.x - handT.x) || 1;
+    const handE = handMid(frames[eIdx].lm);
     const lerpX = handT.x + (handI.x - handT.x) * 0.3;
-    const deviation = (handE.x - lerpX) * targetDir; // >0 ⇒ hands thrown outward toward target early
-    const sc = bodyScale(lmT);
-    if (deviation > 0.06 * sc) {
-      flaws.push({
-        id: 'over-the-top',
-        name: 'Over-the-top move (estimate)',
-        detail: 'Hands shifted toward the target line early in the downswing instead of dropping inside.',
-        t: frames[eIdx].t,
-        joints: [11, 12, lead.wr],
-        severity: deviation > 0.12 * sc ? 'high' : 'med',
-      });
-    }
+    const deviation = (handE.x - lerpX) * targetDir / scT;
+    if (deviation > 0.06) add({ id: 'over-the-top', name: 'Over-the-top downswing',
+      detail: 'Hands shifted out toward the target line early in transition instead of dropping inside.',
+      t: frames[eIdx].t, joints: [11, 12, lead.wr], severity: deviation > 0.12 ? 'high' : 'med' });
   }
 
-  // 3) Early extension — proxy: hips rise toward standing through impact.
+  // 3) Early extension — hips push toward the ball / stand up through impact.
   if (vis(lmA, 23) && vis(lmA, 24) && vis(lmI, 23) && vis(lmI, 24)) {
-    const hipA = mid(lmA[23], lmA[24]);
-    const hipI = mid(lmI[23], lmI[24]);
-    const rise = hipA.y - hipI.y; // positive ⇒ hips moved up (toward camera/standing)
-    const sc = bodyScale(lmA);
-    if (rise > 0.06 * sc) {
-      flaws.push({
-        id: 'early-extension',
-        name: 'Early extension',
-        detail: 'Hips pushed up / toward the ball through impact rather than holding posture.',
-        t: ev.impact.t,
-        joints: [23, 24],
-        severity: rise > 0.12 * sc ? 'high' : 'med',
-      });
-    }
+    const rise = (hip(lmA).y - hip(lmI).y) / scA;
+    if (rise > 0.06) add({ id: 'early-extension', name: 'Early extension',
+      detail: 'Hips pushed up / toward the ball through impact rather than holding posture.',
+      t: ev.impact.t, joints: [23, 24], severity: rise > 0.12 ? 'high' : 'med' });
   }
 
-  // 4) Lateral sway — proxy: pelvis slides sideways from address to top.
+  // 4) Lateral sway — pelvis slides away from the target in the backswing.
   if (vis(lmA, 23) && vis(lmA, 24) && vis(lmT, 23) && vis(lmT, 24)) {
-    const hipA = mid(lmA[23], lmA[24]);
-    const hipT = mid(lmT[23], lmT[24]);
-    const sc = bodyScale(lmA);
-    const slide = Math.abs(hipT.x - hipA.x) / sc;
-    if (slide > 0.18) {
-      flaws.push({
-        id: 'sway',
-        name: 'Lateral sway in backswing',
-        detail: 'Hips slid sideways during the backswing instead of rotating in place.',
-        t: ev.top.t,
-        joints: [23, 24],
-        severity: slide > 0.30 ? 'high' : 'med',
-      });
-    }
+    const away = (hip(lmA).x - hip(lmT).x) * targetDir / scA; // >0 ⇒ hips moved away from target
+    if (away > 0.16) add({ id: 'sway', name: 'Lateral sway in backswing',
+      detail: 'Hips slid away from the target during the backswing instead of rotating in place.',
+      t: ev.top.t, joints: [23, 24], severity: away > 0.28 ? 'high' : 'med' });
   }
 
-  // 5) Chicken wing — proxy: lead elbow stays bent at follow-through.
+  // 5) Reverse pivot — upper body leans toward the target at the top.
+  if (vis(lmT, 11) && vis(lmT, 12) && vis(lmT, 23) && vis(lmT, 24)) {
+    const lean = (sho(lmT).x - hip(lmT).x) * targetDir / scT; // >0 ⇒ shoulders on target side of hips
+    if (lean > 0.12) add({ id: 'reverse-pivot', name: 'Reverse pivot',
+      detail: 'Upper body tilted toward the target at the top (weight on the lead side) instead of loading behind the ball.',
+      t: ev.top.t, joints: [11, 12, 23, 24], severity: lean > 0.22 ? 'high' : 'med' });
+  }
+
+  // 6) Head sway — the head drifts laterally off the ball during the backswing.
+  if (vis(lmA, 0) && vis(lmT, 0)) {
+    const move = Math.abs(lmT[0].x - lmA[0].x) / scA;
+    if (move > 0.16) add({ id: 'head-sway', name: 'Head sways off the ball',
+      detail: 'The head drifted sideways during the backswing — a steadier head improves consistency of contact.',
+      t: ev.top.t, joints: [0], severity: move > 0.28 ? 'high' : 'med' });
+  }
+
+  // 7) Loss of width — lead arm folds at the top.
+  if (vis(lmT, lead.sh) && vis(lmT, lead.el) && vis(lmT, lead.wr)) {
+    const a = angleAt(lmT[lead.el], lmT[lead.sh], lmT[lead.wr]);
+    if (a < 150) add({ id: 'lead-arm-bent', name: 'Bent lead arm at top (lost width)',
+      detail: `Lead arm folded (~${Math.round(a)}°) at the top, collapsing the swing's width and radius.`,
+      t: ev.top.t, joints: [lead.el, lead.wr], severity: a < 125 ? 'high' : 'med' });
+  }
+
+  // 8) Flying trail elbow — trail elbow lifts up/away from the body at the top.
+  if (vis(lmT, trail.sh) && vis(lmT, trail.el)) {
+    const lift = (lmT[trail.sh].y - lmT[trail.el].y) / scT; // >0 ⇒ elbow above shoulder
+    if (lift > 0.05) add({ id: 'flying-elbow', name: 'Flying trail elbow',
+      detail: 'The trail elbow lifted up and away from the body at the top instead of staying connected.',
+      t: ev.top.t, joints: [trail.el], severity: lift > 0.15 ? 'high' : 'med' });
+  }
+
+  // 9) Standing up — hips/torso lift out of posture during the backswing.
+  if (vis(lmA, 23) && vis(lmA, 24) && vis(lmT, 23) && vis(lmT, 24)) {
+    const up = (hip(lmA).y - hip(lmT).y) / scA; // >0 ⇒ hips rose
+    if (up > 0.08) add({ id: 'backswing-standup', name: 'Standing up in the backswing',
+      detail: 'Hips/torso lifted out of posture during the backswing, raising the swing’s low point.',
+      t: ev.top.t, joints: [23, 24], severity: up > 0.16 ? 'high' : 'med' });
+  }
+
+  // 10) Lateral slide — pelvis slides past the lead foot in the downswing.
+  if (vis(lmI, 23) && vis(lmI, 24) && vis(lmI, lead.ank)) {
+    const pastFoot = (hip(lmI).x - lmI[lead.ank].x) * targetDir / scI;
+    if (pastFoot > 0.05) add({ id: 'hip-slide', name: 'Lateral slide in downswing',
+      detail: 'Hips slid toward the target past the lead foot instead of rotating around it.',
+      t: ev.impact.t, joints: [23, 24, lead.ank], severity: pastFoot > 0.15 ? 'high' : 'med' });
+  }
+
+  // 11) Hanging back — weight stays on the trail side at impact.
+  if (vis(lmA, 23) && vis(lmA, 24) && vis(lmI, 23) && vis(lmI, 24)) {
+    const shift = (hip(lmI).x - hip(lmA).x) * targetDir / scA; // >0 ⇒ shifted toward target
+    if (shift < -0.05) add({ id: 'hanging-back', name: 'Hanging back (no weight shift)',
+      detail: 'Hips stayed on the trail side through impact rather than shifting toward the target.',
+      t: ev.impact.t, joints: [23, 24], severity: shift < -0.12 ? 'high' : 'med' });
+  }
+
+  // 12) Head ahead of the ball at impact.
+  if (vis(lmA, 0) && vis(lmI, 0)) {
+    const ahead = (lmI[0].x - lmA[0].x) * targetDir / scA;
+    if (ahead > 0.12) add({ id: 'head-ahead', name: 'Head ahead of the ball at impact',
+      detail: 'The head moved toward the target ahead of the ball at impact instead of staying behind it.',
+      t: ev.impact.t, joints: [0], severity: ahead > 0.22 ? 'high' : 'med' });
+  }
+
+  // 13) Chicken wing — lead elbow stays bent through the follow-through.
   if (vis(lmF, lead.sh) && vis(lmF, lead.el) && vis(lmF, lead.wr)) {
-    const elbow = angleAt(lmF[lead.el], lmF[lead.sh], lmF[lead.wr]);
-    if (elbow < 150) {
-      flaws.push({
-        id: 'chicken-wing',
-        name: 'Chicken-wing follow-through',
-        detail: `Lead arm stayed bent (~${Math.round(elbow)}°) past impact instead of extending.`,
-        t: ev.follow.t,
-        joints: [lead.el, lead.wr],
-        severity: elbow < 120 ? 'high' : 'med',
-      });
-    }
+    const a = angleAt(lmF[lead.el], lmF[lead.sh], lmF[lead.wr]);
+    if (a < 150) add({ id: 'chicken-wing', name: 'Chicken-wing follow-through',
+      detail: `Lead arm stayed bent (~${Math.round(a)}°) past impact instead of extending.`,
+      t: ev.follow.t, joints: [lead.el, lead.wr], severity: a < 120 ? 'high' : 'med' });
+  }
+
+  // 14) Incomplete finish — hands never reach above shoulder height.
+  if (vis(lmF, 15) && vis(lmF, 16) && vis(lmF, 11) && vis(lmF, 12)) {
+    const below = (handMid(lmF).y - sho(lmF).y) / scF; // >0 ⇒ hands below shoulder line
+    if (below > 0.05) add({ id: 'incomplete-finish', name: 'Incomplete follow-through',
+      detail: 'Hands never climbed above shoulder height into a full finish — often a sign of deceleration or quitting on the shot.',
+      t: ev.follow.t, joints: [15, 16], severity: below > 0.25 ? 'high' : 'med' });
+  }
+
+  // 15) Excessive head movement across the whole swing.
+  if (frames.length > 3 && frames.every(f => vis(f.lm, 0))) {
+    let minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity;
+    for (const f of frames) { const nz = f.lm[0]; if (nz.x < minx) minx = nz.x; if (nz.x > maxx) maxx = nz.x; if (nz.y < miny) miny = nz.y; if (nz.y > maxy) maxy = nz.y; }
+    const range = Math.max(maxx - minx, maxy - miny) / scA;
+    if (range > 0.5) add({ id: 'head-movement', name: 'Excessive head movement',
+      detail: 'The head travelled a long way through the swing — quieter head motion improves strike consistency.',
+      t: ev.top.t, joints: [0], severity: range > 0.8 ? 'high' : 'med' });
+  }
+
+  // 16) Rushed transition — backswing-to-downswing tempo much quicker than ~3:1.
+  const backT = ev.top.t - ev.address.t, downT = ev.impact.t - ev.top.t;
+  if (backT > 0.05 && downT > 0.02) {
+    const ratio = backT / downT;
+    if (ratio < 1.6) add({ id: 'quick-tempo', name: 'Rushed transition (quick tempo)',
+      detail: `Backswing-to-downswing tempo is ~${ratio.toFixed(1)}:1 — quicker than the ~3:1 of most tour swings, which can hurt sequencing.`,
+      t: ev.top.t, joints: [15, 16], severity: ratio < 1.1 ? 'high' : 'low' });
   }
 
   return flaws;
+}
+
+// Summary metrics used by the side-by-side comparison.
+function computeMetrics(lane) {
+  const ev = lane.events;
+  if (!ev) return null;
+  const backT = ev.top.t - ev.address.t;
+  const downT = ev.impact.t - ev.top.t;
+  const swingT = ev.follow.t - ev.address.t;
+  return { backT, downT, swingT, tempo: downT > 0 ? backT / downT : 0, flawCount: (lane.flaws || []).length };
 }
 
 // --- results rendering ---
@@ -1174,14 +1289,104 @@ function renderResults() {
   }
 }
 
+// --- side-by-side comparison ---
+const fmtSec = (s) => isFinite(s) ? s.toFixed(2) + 's' : '—';
+
+function renderCompare() {
+  compareEl.innerHTML = '';
+  const a = lanes.find(l => l.id === 'A'), b = lanes.find(l => l.id === 'B');
+  const card = document.createElement('div');
+  card.className = 'compare-card';
+  card.innerHTML = '<h3>Swing A vs Swing B</h3>';
+
+  const haveBoth = a && b && a.ready && b.ready && a.events && b.events;
+  if (!haveBoth) {
+    const p = document.createElement('div');
+    p.className = 'cmp-shared';
+    p.textContent = 'Load and analyze both swings, then press Compare to see them side by side.';
+    card.appendChild(p);
+    compareEl.appendChild(card);
+    return;
+  }
+
+  const ma = computeMetrics(a), mb = computeMetrics(b);
+  const metricTable = document.createElement('table');
+  metricTable.className = 'cmp-table';
+  metricTable.innerHTML = '<tr><th>Metric</th><th>Swing A</th><th>Swing B</th></tr>';
+  const rows = [
+    ['Swing length', fmtSec(ma.swingT), fmtSec(mb.swingT), null],
+    ['Backswing', fmtSec(ma.backT), fmtSec(mb.backT), null],
+    ['Downswing', fmtSec(ma.downT), fmtSec(mb.downT), null],
+    ['Tempo (back : down)', ma.tempo.toFixed(1) + ' : 1', mb.tempo.toFixed(1) + ' : 1', 'tempo'],
+    ['Flaws found', String(ma.flawCount), String(mb.flawCount), 'flaws'],
+  ];
+  for (const [metric, va, vb, kind] of rows) {
+    let aCls = 'val', bCls = 'val';
+    if (kind === 'flaws') { const na = +va, nb = +vb; if (na < nb) aCls += ' better'; else if (nb < na) bCls += ' better'; }
+    if (kind === 'tempo') { const da = Math.abs(ma.tempo - 3), db = Math.abs(mb.tempo - 3); if (da < db) aCls += ' better'; else if (db < da) bCls += ' better'; }
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="metric">${metric}</td><td class="${aCls}">${va}</td><td class="${bCls}">${vb}</td>`;
+    metricTable.appendChild(tr);
+  }
+  card.appendChild(metricTable);
+
+  // Detected faults per swing.
+  const faultTable = document.createElement('table');
+  faultTable.className = 'cmp-table';
+  faultTable.innerHTML = '<tr><th>Detected faults</th><th>Swing A</th><th>Swing B</th></tr>';
+  const cell = (lane) => (!lane.flaws || !lane.flaws.length)
+    ? '<span class="cmp-none">✓ none detected</span>'
+    : lane.flaws.map(f => `<span class="cmp-flaw"><span class="dotc" style="background:${SEV_COLOR[f.severity] || SEV_COLOR.med}"></span>${f.name}</span>`).join('<br>');
+  const fr = document.createElement('tr');
+  fr.innerHTML = `<td class="metric">Faults</td><td>${cell(a)}</td><td>${cell(b)}</td>`;
+  faultTable.appendChild(fr);
+  card.appendChild(faultTable);
+
+  // Faults common to both swings.
+  const idsB = new Set((b.flaws || []).map(f => f.id));
+  const shared = (a.flaws || []).filter(f => idsB.has(f.id));
+  const sh = document.createElement('div');
+  sh.className = 'cmp-shared';
+  sh.textContent = shared.length
+    ? `Common to both swings: ${shared.map(f => f.name).join(', ')}.`
+    : 'No faults common to both swings.';
+  card.appendChild(sh);
+
+  const disc = document.createElement('div');
+  disc.className = 'disclaimer';
+  disc.textContent = 'Heuristic, pose-only estimates from a single camera angle — a directional comparison, not precise measurement.';
+  card.appendChild(disc);
+
+  compareEl.appendChild(card);
+}
+
+async function compareSwings() {
+  if (loadedLanes().length < 2) {
+    analyzeStatus.className = 'pose-status';
+    analyzeStatus.textContent = 'load two swings first';
+    return;
+  }
+  // Make sure both swings have been analyzed.
+  if (loadedLanes().some(l => !l.events)) await analyzeAll();
+  setFocus('both');
+  controlLanes().forEach(l => { l.video.currentTime = 0; }); // line both up at the start
+  updateUI();
+  renderCompare();
+  compareEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 analyzeBtn.addEventListener('click', analyzeAll);
+compareBtn.addEventListener('click', compareSwings);
 handednessSel.addEventListener('change', () => {
   // Re-grade already-captured swings with the new lead side.
   let any = false;
   for (const lane of lanes) {
     if (lane.frames && lane.events) { lane.flaws = detectFlaws(lane); any = true; }
   }
-  if (any) renderResults();
+  if (any) {
+    renderResults();
+    if (compareEl.children.length) renderCompare();
+  }
 });
 
 setupPose();
