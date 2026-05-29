@@ -343,6 +343,41 @@
   .cmp-flaw .dotc { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
   .cmp-none { color: var(--accent); font-size: 12px; }
   .cmp-shared { color: var(--muted); font-size: 12px; margin-top: 10px; }
+
+  /* ---- Mobile / small screens ---- */
+  @media (max-width: 600px) {
+    header { padding: 14px 16px; gap: 8px; }
+    header h1 { font-size: 17px; }
+    main { padding: 14px 14px 32px; }
+
+    /* The transport has a lot of controls; sticky + wrapped it would swallow a
+       phone's viewport, so let it scroll away with the page on small screens. */
+    .transport { position: static; padding: 12px; gap: 12px; margin-bottom: 14px; }
+    .transport-row { gap: 10px; }
+    /* Let a group's own buttons wrap so wide groups (e.g. Analyze) don't
+       overflow the viewport horizontally. */
+    .group { gap: 6px; flex-wrap: wrap; }
+    .scrub-wrap { gap: 8px; }
+    .time { min-width: 0; font-size: 12px; }
+
+    /* Roomier tap targets. */
+    .btn { padding: 10px 14px; }
+    .btn.icon { min-width: 46px; }
+    .speed-btn { padding: 9px 12px; }
+    /* 16px form controls stop iOS Safari from auto-zooming on focus. */
+    .select { font-size: 16px; padding: 9px 10px; }
+
+    /* Keyboard hints are useless without a keyboard. */
+    .legend { display: none; }
+
+    .stage { max-height: 56vh; }
+
+    /* Let the comparison table scroll rather than squashing its columns. */
+    .compare-card { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .cmp-table { min-width: 460px; }
+
+    .lane-head .fname { max-width: 50%; }
+  }
 </style>
 </head>
 <body>
@@ -1003,31 +1038,41 @@ function detectEvents(frames) {
   if (!frames || frames.length < 4) return null;
   const hand = frames.map(f => mid(f.lm[15], f.lm[16])); // wrist midpoint
   const n = frames.length;
-  // Top of backswing = highest hands (min y) in the first ~75% of the swing.
-  let topIdx = 0, topY = Infinity;
-  const topSearchEnd = Math.max(2, Math.floor(n * 0.75));
-  for (let i = 1; i < topSearchEnd; i++) {
-    if (hand[i].y < topY) { topY = hand[i].y; topIdx = i; }
+  // Per-frame hand speed. A real swing is a short burst of motion (~1s) that's
+  // usually surrounded by dead time (setup before, posing after). We isolate that
+  // burst so the reported swing length is the swing, not the whole video clip.
+  const spd = new Array(n).fill(0);
+  for (let i = 1; i < n; i++) spd[i] = dist(hand[i], hand[i - 1]);
+  // Impact = the single fastest frame: the downswing is the quickest part of any swing.
+  let impIdx = 1, impSpd = -1;
+  for (let i = 1; i < n; i++) { if (spd[i] > impSpd) { impSpd = spd[i]; impIdx = i; } }
+  // A small fraction of peak speed marks "the hands are actually moving".
+  const moveThresh = Math.max(impSpd * 0.10, 0.004);
+  // How many consecutive quiet frames end the swing. ~0.18s tolerates the brief
+  // pause at the top of the backswing without mistaking it for the swing's edge.
+  const frameDt = (frames[n - 1].t - frames[0].t) / Math.max(1, n - 1);
+  const quietRun = Math.max(3, Math.round(0.18 / Math.max(frameDt, 1e-3)));
+  // Address = walk back from impact to where continuous motion began (trim setup).
+  let addrIdx = 0;
+  for (let i = impIdx - 1, quiet = 0; i >= 0; i--) {
+    if (spd[i] < moveThresh) { if (++quiet >= quietRun) { addrIdx = i + quiet; break; } }
+    else { quiet = 0; addrIdx = i; }
   }
-  // Address = stillest frame before the top (least hand movement), default frame 0.
-  let addrIdx = 0, addrMove = Infinity;
-  for (let i = 0; i < Math.max(1, Math.floor(topIdx * 0.6)); i++) {
-    const mv = dist(hand[i], hand[Math.min(i + 1, n - 1)]);
-    if (mv < addrMove) { addrMove = mv; addrIdx = i; }
+  // End of swing = walk forward from impact to where motion settles (trim posing).
+  let endIdx = n - 1;
+  for (let i = impIdx + 1, quiet = 0; i < n; i++) {
+    if (spd[i] < moveThresh) { if (++quiet >= quietRun) { endIdx = i - quiet; break; } }
+    else { quiet = 0; endIdx = i; }
   }
-  // Impact = fastest hand frame after the top (downswing bottom), within a window.
-  let impIdx = Math.min(topIdx + 1, n - 1), impSpd = -1;
-  const impEnd = Math.min(n - 1, topIdx + Math.ceil((n - topIdx) * 0.7));
-  for (let i = topIdx + 1; i <= impEnd; i++) {
-    const spd = dist(hand[i], hand[i - 1]);
-    if (spd > impSpd) { impSpd = spd; impIdx = i; }
-  }
-  // Follow-through = highest hands again after impact.
-  let folIdx = n - 1, folY = Infinity;
-  for (let i = impIdx + 1; i < n; i++) {
-    if (hand[i].y < folY) { folY = hand[i].y; folIdx = i; }
-  }
-  if (folIdx <= impIdx) folIdx = n - 1;
+  if (addrIdx >= impIdx) addrIdx = Math.max(0, impIdx - 1);
+  if (endIdx <= impIdx) endIdx = Math.min(n - 1, impIdx + 1);
+  // Top of backswing = highest hands (min y) between address and impact.
+  let topIdx = addrIdx, topY = Infinity;
+  for (let i = addrIdx; i < impIdx; i++) { if (hand[i].y < topY) { topY = hand[i].y; topIdx = i; } }
+  // Follow-through = highest hands (the finish) between impact and the settle point.
+  let folIdx = endIdx, folY = Infinity;
+  for (let i = impIdx + 1; i <= endIdx; i++) { if (hand[i].y < folY) { folY = hand[i].y; folIdx = i; } }
+  if (folIdx <= impIdx) folIdx = endIdx;
   return {
     address: { idx: addrIdx, t: frames[addrIdx].t },
     top: { idx: topIdx, t: frames[topIdx].t },
