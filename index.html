@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Golf Swing Assessor</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel-2: #1c2230;
+    --border: #2a3140;
+    --accent: #2ec16b;
+    --accent-dim: #1f7d46;
+    --text: #e6edf3;
+    --muted: #8b97a7;
+    --danger: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: .2px; }
+  header .tag {
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    padding: 3px 8px;
+    border-radius: 999px;
+  }
+  main { padding: 20px 24px 40px; }
+
+  .lanes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+  @media (max-width: 820px) {
+    .lanes { grid-template-columns: 1fr; }
+  }
+
+  .lane {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .lane-head {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .lane-head .label { font-weight: 600; font-size: 14px; }
+  .lane-head .fname {
+    font-size: 12px;
+    color: var(--muted);
+    max-width: 60%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .stage {
+    position: relative;
+    background: #000;
+    aspect-ratio: 16 / 9;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .stage video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: none;
+    background: #000;
+  }
+  .stage.loaded video { display: block; }
+
+  .dropzone {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    text-align: center;
+    color: var(--muted);
+    cursor: pointer;
+    border: 2px dashed var(--border);
+    margin: 12px;
+    border-radius: 10px;
+    transition: border-color .15s, background .15s, color .15s;
+    padding: 16px;
+  }
+  .stage.loaded .dropzone { display: none; }
+  .dropzone:hover { color: var(--text); border-color: var(--accent-dim); }
+  .dropzone.dragover {
+    border-color: var(--accent);
+    background: rgba(46, 193, 107, .08);
+    color: var(--text);
+  }
+  .dropzone .big { font-size: 15px; font-weight: 600; color: var(--text); }
+  .dropzone .small { font-size: 12px; }
+  .dropzone svg { opacity: .7; }
+
+  .lane-foot {
+    padding: 8px 14px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .lane-foot button {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .lane-foot button:hover { border-color: var(--accent-dim); }
+
+  /* Transport */
+  .transport {
+    margin-top: 20px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .transport-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .scrub-wrap { display: flex; align-items: center; gap: 12px; width: 100%; }
+  input[type="range"] {
+    flex: 1;
+    accent-color: var(--accent);
+    height: 4px;
+  }
+  .time {
+    font-variant-numeric: tabular-nums;
+    font-size: 13px;
+    color: var(--muted);
+    min-width: 92px;
+    text-align: right;
+  }
+
+  .btn {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color .15s, background .15s, opacity .15s;
+  }
+  .btn:hover:not(:disabled) { border-color: var(--accent-dim); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn.primary {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+  }
+  .btn.primary:hover:not(:disabled) { background: var(--accent); }
+  .btn.icon { min-width: 44px; text-align: center; }
+
+  .group { display: flex; gap: 6px; align-items: center; }
+  .group .glabel { font-size: 12px; color: var(--muted); margin-right: 4px; }
+  .speed-btn {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .speed-btn.active {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    color: #fff;
+  }
+
+  .legend {
+    margin-top: 14px;
+    font-size: 12px;
+    color: var(--muted);
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+  .legend kbd {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-size: 11px;
+    color: var(--text);
+    font-family: inherit;
+  }
+  .roadmap {
+    margin-top: 22px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .roadmap b { color: var(--text); }
+</style>
+</head>
+<body>
+<header>
+  <h1>⛳ Golf Swing Assessor</h1>
+  <span class="tag">Phase 1 · Side-by-side player</span>
+</header>
+
+<main>
+  <div class="lanes">
+    <!-- Lane A -->
+    <section class="lane" data-lane="A">
+      <div class="lane-head">
+        <span class="label">Swing A</span>
+        <span class="fname" data-fname>No video loaded</span>
+      </div>
+      <div class="stage" data-stage>
+        <video data-video playsinline preload="auto"></video>
+        <div class="dropzone" data-dropzone tabindex="0" role="button" aria-label="Upload swing A">
+          <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 16V4m0 0L7 9m5-5l5 5"/><path d="M4 17v2a1 1 0 001 1h14a1 1 0 001-1v-2"/></svg>
+          <span class="big">Drag a swing video here</span>
+          <span class="small">or click to browse · MP4, MOV, WebM</span>
+        </div>
+      </div>
+      <div class="lane-foot">
+        <span data-dims>—</span>
+        <button data-clear hidden>Replace video</button>
+      </div>
+      <input type="file" accept="video/*" data-file hidden />
+    </section>
+
+    <!-- Lane B -->
+    <section class="lane" data-lane="B">
+      <div class="lane-head">
+        <span class="label">Swing B</span>
+        <span class="fname" data-fname>No video loaded</span>
+      </div>
+      <div class="stage" data-stage>
+        <video data-video playsinline preload="auto"></video>
+        <div class="dropzone" data-dropzone tabindex="0" role="button" aria-label="Upload swing B">
+          <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 16V4m0 0L7 9m5-5l5 5"/><path d="M4 17v2a1 1 0 001 1h14a1 1 0 001-1v-2"/></svg>
+          <span class="big">Drag a swing video here</span>
+          <span class="small">or click to browse · MP4, MOV, WebM</span>
+        </div>
+      </div>
+      <div class="lane-foot">
+        <span data-dims>—</span>
+        <button data-clear hidden>Replace video</button>
+      </div>
+      <input type="file" accept="video/*" data-file hidden />
+    </section>
+  </div>
+
+  <div class="transport">
+    <div class="scrub-wrap">
+      <input type="range" id="scrubber" min="0" max="1000" value="0" step="1" disabled />
+      <span class="time" id="timeReadout">0:00.0 / 0:00.0</span>
+    </div>
+    <div class="transport-row">
+      <button class="btn icon" id="restartBtn" title="Restart (Home)" disabled>⟲</button>
+      <button class="btn primary icon" id="playBtn" title="Play / Pause (Space)" disabled>▶</button>
+      <div class="group">
+        <span class="glabel">Step</span>
+        <button class="btn icon" id="stepBack" title="Previous frame (←)" disabled>◀|</button>
+        <button class="btn icon" id="stepFwd" title="Next frame (→)" disabled>|▶</button>
+      </div>
+      <div class="group">
+        <span class="glabel">Speed</span>
+        <button class="speed-btn" data-speed="0.25">0.25×</button>
+        <button class="speed-btn" data-speed="0.5">0.5×</button>
+        <button class="speed-btn active" data-speed="1">1×</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span><kbd>Space</kbd> play / pause</span>
+    <span><kbd>←</kbd> <kbd>→</kbd> step one frame</span>
+    <span><kbd>↑</kbd> <kbd>↓</kbd> jump 10 frames</span>
+    <span><kbd>Home</kbd> restart</span>
+  </div>
+
+  <div class="roadmap">
+    <b>Next:</b> Phase 2 — MediaPipe pose-skeleton overlay · Phase 3 — automatic flaw detection.
+  </div>
+</main>
+
+<script>
+const FPS = 30;
+const STEP = 1 / FPS;
+
+// ---- Lane abstraction -------------------------------------------------------
+class Lane {
+  constructor(rootEl) {
+    this.root = rootEl;
+    this.id = rootEl.dataset.lane;
+    this.stage = rootEl.querySelector('[data-stage]');
+    this.video = rootEl.querySelector('[data-video]');
+    this.dropzone = rootEl.querySelector('[data-dropzone]');
+    this.fileInput = rootEl.querySelector('[data-file]');
+    this.fnameEl = rootEl.querySelector('[data-fname]');
+    this.dimsEl = rootEl.querySelector('[data-dims]');
+    this.clearBtn = rootEl.querySelector('[data-clear]');
+    this.url = null;
+    this.ready = false;
+    this._wire();
+  }
+
+  _wire() {
+    // click / keyboard to browse
+    this.dropzone.addEventListener('click', () => this.fileInput.click());
+    this.dropzone.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.fileInput.click(); }
+    });
+    this.clearBtn.addEventListener('click', () => this.fileInput.click());
+    this.fileInput.addEventListener('change', (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (f) this.load(f);
+    });
+
+    // drag & drop
+    const dz = this.dropzone;
+    ['dragenter', 'dragover'].forEach(ev =>
+      dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add('dragover'); }));
+    ['dragleave', 'dragend'].forEach(ev =>
+      dz.addEventListener(ev, () => dz.classList.remove('dragover')));
+    dz.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dz.classList.remove('dragover');
+      const f = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f && f.type.startsWith('video/')) this.load(f);
+    });
+
+    this.video.addEventListener('loadedmetadata', () => {
+      this.ready = true;
+      this.dimsEl.textContent =
+        `${this.video.videoWidth}×${this.video.videoHeight} · ${formatTime(this.video.duration)}`;
+      onLaneReady();
+    });
+  }
+
+  load(file) {
+    if (this.url) URL.revokeObjectURL(this.url);
+    this.url = URL.createObjectURL(file);
+    this.ready = false;
+    this.video.src = this.url;
+    this.video.load();
+    this.video.pause();
+    this.stage.classList.add('loaded');
+    this.fnameEl.textContent = file.name;
+    this.fnameEl.title = file.name;
+    this.clearBtn.hidden = false;
+  }
+}
+
+function formatTime(t) {
+  if (!isFinite(t)) t = 0;
+  const m = Math.floor(t / 60);
+  const s = (t % 60);
+  return `${m}:${s.toFixed(1).padStart(4, '0')}`;
+}
+
+// ---- Sync controller --------------------------------------------------------
+const lanes = [...document.querySelectorAll('.lane')].map(el => new Lane(el));
+const playBtn = document.getElementById('playBtn');
+const restartBtn = document.getElementById('restartBtn');
+const stepBack = document.getElementById('stepBack');
+const stepFwd = document.getElementById('stepFwd');
+const scrubber = document.getElementById('scrubber');
+const timeReadout = document.getElementById('timeReadout');
+const speedBtns = [...document.querySelectorAll('.speed-btn')];
+
+let speed = 1;
+let playing = false;
+let scrubbing = false;
+
+const loadedLanes = () => lanes.filter(l => l.ready);
+const maxDuration = () =>
+  Math.max(0, ...loadedLanes().map(l => l.video.duration || 0));
+const masterTime = () =>
+  Math.max(0, ...loadedLanes().map(l => l.video.currentTime || 0));
+
+function onLaneReady() {
+  const any = loadedLanes().length > 0;
+  [playBtn, restartBtn, stepBack, stepFwd].forEach(b => b.disabled = !any);
+  scrubber.disabled = !any;
+  loadedLanes().forEach(l => l.video.playbackRate = speed);
+  updateUI();
+}
+
+function play() {
+  const ls = loadedLanes();
+  if (!ls.length) return;
+  playing = true;
+  playBtn.textContent = '❚❚';
+  ls.forEach(l => {
+    l.video.playbackRate = speed;
+    // restart a lane that already reached its end
+    if (l.video.ended || l.video.currentTime >= (l.video.duration - 0.001)) {
+      // only rewind if all are at the end; otherwise keep relative positions
+    }
+    l.video.play().catch(() => {});
+  });
+}
+
+function pause() {
+  playing = false;
+  playBtn.textContent = '▶';
+  loadedLanes().forEach(l => l.video.pause());
+}
+
+function togglePlay() { playing ? pause() : play(); }
+
+function restart() {
+  loadedLanes().forEach(l => l.video.currentTime = 0);
+  if (!playing) updateUI();
+}
+
+function stepBy(frames) {
+  pause();
+  loadedLanes().forEach(l => {
+    const t = Math.min(
+      Math.max(0, l.video.currentTime + frames * STEP),
+      l.video.duration || 0
+    );
+    l.video.currentTime = t;
+  });
+}
+
+function seekFraction(frac) {
+  loadedLanes().forEach(l => {
+    l.video.currentTime = frac * (l.video.duration || 0);
+  });
+}
+
+function setSpeed(v) {
+  speed = v;
+  loadedLanes().forEach(l => l.video.playbackRate = v);
+  speedBtns.forEach(b => b.classList.toggle('active', parseFloat(b.dataset.speed) === v));
+}
+
+function updateUI() {
+  const dur = maxDuration();
+  const cur = masterTime();
+  if (!scrubbing) {
+    scrubber.value = dur > 0 ? Math.round((cur / dur) * 1000) : 0;
+  }
+  timeReadout.textContent = `${formatTime(cur)} / ${formatTime(dur)}`;
+}
+
+// Stop playback when the longest video ends.
+function tick() {
+  if (playing) {
+    const dur = maxDuration();
+    const allDone = loadedLanes().every(
+      l => l.video.ended || l.video.currentTime >= (l.video.duration - 0.05)
+    );
+    if (allDone && dur > 0) pause();
+  }
+  updateUI();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+// ---- Controls wiring --------------------------------------------------------
+playBtn.addEventListener('click', togglePlay);
+restartBtn.addEventListener('click', restart);
+stepBack.addEventListener('click', () => stepBy(-1));
+stepFwd.addEventListener('click', () => stepBy(1));
+speedBtns.forEach(b => b.addEventListener('click', () => setSpeed(parseFloat(b.dataset.speed))));
+
+scrubber.addEventListener('input', () => {
+  scrubbing = true;
+  seekFraction(scrubber.value / 1000);
+  updateUI();
+});
+scrubber.addEventListener('change', () => { scrubbing = false; });
+
+document.addEventListener('keydown', (e) => {
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' && e.target.type === 'range') return;
+  if (!loadedLanes().length) return;
+  switch (e.key) {
+    case ' ': e.preventDefault(); togglePlay(); break;
+    case 'ArrowRight': e.preventDefault(); stepBy(1); break;
+    case 'ArrowLeft': e.preventDefault(); stepBy(-1); break;
+    case 'ArrowUp': e.preventDefault(); stepBy(10); break;
+    case 'ArrowDown': e.preventDefault(); stepBy(-10); break;
+    case 'Home': e.preventDefault(); restart(); break;
+  }
+});
+</script>
+</body>
+</html>
