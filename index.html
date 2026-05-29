@@ -94,6 +94,16 @@
   }
   .stage.loaded video { display: block; }
 
+  .stage canvas.overlay {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    display: none;
+  }
+  .stage.loaded canvas.overlay { display: block; }
+
   .dropzone {
     position: absolute;
     inset: 0;
@@ -210,6 +220,10 @@
     border-color: var(--accent);
     color: #fff;
   }
+  .speed-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .pose-status { font-size: 12px; color: var(--muted); min-width: 96px; }
+  .pose-status.ready { color: var(--accent); }
+  .pose-status.error { color: var(--danger); }
 
   .legend {
     margin-top: 14px;
@@ -240,7 +254,7 @@
 <body>
 <header>
   <h1>⛳ Golf Swing Assessor</h1>
-  <span class="tag">Phase 1 · Side-by-side player</span>
+  <span class="tag">Phase 2 · Pose skeleton overlay</span>
 </header>
 
 <main>
@@ -253,6 +267,7 @@
       </div>
       <div class="stage" data-stage>
         <video data-video playsinline preload="auto"></video>
+        <canvas class="overlay" data-overlay></canvas>
         <div class="dropzone" data-dropzone tabindex="0" role="button" aria-label="Upload swing A">
           <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 16V4m0 0L7 9m5-5l5 5"/><path d="M4 17v2a1 1 0 001 1h14a1 1 0 001-1v-2"/></svg>
           <span class="big">Drag a swing video here</span>
@@ -274,6 +289,7 @@
       </div>
       <div class="stage" data-stage>
         <video data-video playsinline preload="auto"></video>
+        <canvas class="overlay" data-overlay></canvas>
         <div class="dropzone" data-dropzone tabindex="0" role="button" aria-label="Upload swing B">
           <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 16V4m0 0L7 9m5-5l5 5"/><path d="M4 17v2a1 1 0 001 1h14a1 1 0 001-1v-2"/></svg>
           <span class="big">Drag a swing video here</span>
@@ -307,6 +323,11 @@
         <button class="speed-btn" data-speed="0.5">0.5×</button>
         <button class="speed-btn active" data-speed="1">1×</button>
       </div>
+      <div class="group">
+        <span class="glabel">Overlay</span>
+        <button class="speed-btn" id="overlayToggle" aria-pressed="false" disabled>Skeleton</button>
+        <span id="poseStatus" class="pose-status">loading pose model…</span>
+      </div>
     </div>
   </div>
 
@@ -318,11 +339,11 @@
   </div>
 
   <div class="roadmap">
-    <b>Next:</b> Phase 2 — MediaPipe pose-skeleton overlay · Phase 3 — automatic flaw detection.
+    <b>Overlay:</b> wrists, elbows, shoulders, hips &amp; knees are highlighted. <b>Next:</b> Phase 3 — automatic flaw detection.
   </div>
 </main>
 
-<script>
+<script type="module">
 const FPS = 30;
 const STEP = 1 / FPS;
 
@@ -526,6 +547,178 @@ document.addEventListener('keydown', (e) => {
     case 'Home': e.preventDefault(); restart(); break;
   }
 });
+
+// ---- Phase 2: MediaPipe pose overlay ----------------------------------------
+const VISION_VER = '0.10.14';
+const VISION_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VER}/vision_bundle.mjs`;
+const WASM_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VER}/wasm`;
+const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+
+// BlazePose 33-landmark indices for the joints golfers care about.
+const KEY_JOINTS = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26];
+const VIS_MIN = 0.4;
+
+let POSE_CONNECTIONS = [];
+let poseReady = false;
+let overlayOn = false;
+
+const overlayToggle = document.getElementById('overlayToggle');
+const poseStatus = document.getElementById('poseStatus');
+
+function setStatus(state, text) {
+  poseStatus.className = 'pose-status' + (state ? ' ' + state : '');
+  poseStatus.textContent = text;
+}
+
+function dot(ctx, x, y, r, fill) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = fill;
+  ctx.fill();
+}
+
+function drawPose(lane, res) {
+  const { video, canvas } = lane;
+  const ctx = canvas.getContext('2d');
+  const cw = video.clientWidth, ch = video.clientHeight;
+  const dpr = window.devicePixelRatio || 1;
+  if (canvas.width !== Math.round(cw * dpr) || canvas.height !== Math.round(ch * dpr)) {
+    canvas.width = Math.round(cw * dpr);
+    canvas.height = Math.round(ch * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cw, ch);
+  if (!res || !res.landmarks || !res.landmarks.length) return;
+
+  const lm = res.landmarks[0];
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return;
+  // Map normalized coords onto the letterboxed (object-fit: contain) video rect.
+  const scale = Math.min(cw / vw, ch / vh);
+  const dw = vw * scale, dh = vh * scale;
+  const ox = (cw - dw) / 2, oy = (ch - dh) / 2;
+  const P = (i) => ({ x: ox + lm[i].x * dw, y: oy + lm[i].y * dh, v: lm[i].visibility ?? 1 });
+
+  // Skeleton connectors
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(46,193,107,0.85)';
+  for (const c of POSE_CONNECTIONS) {
+    const a = P(c.start), b = P(c.end);
+    if (a.v < VIS_MIN || b.v < VIS_MIN) continue;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+  // All landmarks (faint)
+  for (let i = 0; i < lm.length; i++) {
+    const p = P(i);
+    if (p.v < VIS_MIN) continue;
+    dot(ctx, p.x, p.y, 2.5, 'rgba(230,237,243,0.65)');
+  }
+  // Key joints (highlighted)
+  for (const i of KEY_JOINTS) {
+    const p = P(i);
+    if (p.v < VIS_MIN) continue;
+    dot(ctx, p.x, p.y, 6, '#2ec16b');
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#0d1117';
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+}
+
+function clearOverlay(lane) {
+  const ctx = lane.canvas.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, lane.canvas.width, lane.canvas.height);
+}
+
+function attachOverlay(lane) {
+  let lastTs = -1;
+  lane.detectAndDraw = () => {
+    if (!overlayOn || !poseReady || !lane.landmarker || !lane.ready) return;
+    if (lane.video.readyState < 2) return;
+    let ts = performance.now();
+    if (ts <= lastTs) ts = lastTs + 1;
+    lastTs = ts;
+    let res;
+    try {
+      res = lane.landmarker.detectForVideo(lane.video, ts);
+    } catch (e) {
+      return;
+    }
+    drawPose(lane, res);
+  };
+  const onFrame = () => {
+    lane.detectAndDraw();
+    if (lane.video.requestVideoFrameCallback) {
+      lane.video.requestVideoFrameCallback(onFrame);
+    }
+  };
+  if (lane.video.requestVideoFrameCallback) {
+    lane.video.requestVideoFrameCallback(onFrame);
+  } else {
+    const raf = () => { lane.detectAndDraw(); requestAnimationFrame(raf); };
+    requestAnimationFrame(raf);
+  }
+  // Frame-stepping / scrubbing while paused still updates the skeleton.
+  lane.video.addEventListener('seeked', () => lane.detectAndDraw());
+  // Draw on the first frame of a freshly loaded (paused) video.
+  lane.video.addEventListener('loadeddata', () => lane.detectAndDraw());
+}
+
+async function createLandmarker(vision, PoseLandmarker) {
+  const opts = {
+    baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
+    runningMode: 'VIDEO',
+    numPoses: 1,
+    minPoseDetectionConfidence: 0.5,
+    minPosePresenceConfidence: 0.5,
+    minTrackingConfidence: 0.5,
+  };
+  try {
+    return await PoseLandmarker.createFromOptions(vision, opts);
+  } catch (e) {
+    opts.baseOptions.delegate = 'CPU';
+    return await PoseLandmarker.createFromOptions(vision, opts);
+  }
+}
+
+async function setupPose() {
+  try {
+    const { PoseLandmarker, FilesetResolver } = await import(VISION_URL);
+    POSE_CONNECTIONS = PoseLandmarker.POSE_CONNECTIONS;
+    const vision = await FilesetResolver.forVisionTasks(WASM_URL);
+    for (const lane of lanes) {
+      lane.landmarker = await createLandmarker(vision, PoseLandmarker);
+      attachOverlay(lane);
+    }
+    poseReady = true;
+    overlayToggle.disabled = false;
+    setStatus('ready', 'pose ready');
+    // On by default once available.
+    setOverlay(true);
+  } catch (e) {
+    console.error('Pose setup failed:', e);
+    setStatus('error', 'pose failed to load');
+  }
+}
+
+function setOverlay(on) {
+  overlayOn = on;
+  overlayToggle.classList.toggle('active', on);
+  overlayToggle.setAttribute('aria-pressed', String(on));
+  for (const lane of lanes) {
+    if (on) lane.detectAndDraw && lane.detectAndDraw();
+    else clearOverlay(lane);
+  }
+}
+
+overlayToggle.addEventListener('click', () => { if (poseReady) setOverlay(!overlayOn); });
+
+setupPose();
 </script>
 </body>
 </html>
