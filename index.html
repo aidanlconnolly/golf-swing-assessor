@@ -50,6 +50,15 @@
   @media (max-width: 820px) {
     .lanes { grid-template-columns: 1fr; }
   }
+  /* Focus a single swing for a bigger, easier-to-see view. */
+  .lanes.view-A, .lanes.view-B {
+    grid-template-columns: 1fr;
+    max-width: 720px;
+    margin: 0 auto;
+  }
+  .lanes.view-A .lane[data-lane="B"],
+  .lanes.view-B .lane[data-lane="A"] { display: none; }
+  .lanes.view-A .stage, .lanes.view-B .stage { max-height: 78vh; }
 
   .lane {
     background: var(--panel);
@@ -81,6 +90,7 @@
     position: relative;
     background: #000;
     aspect-ratio: 16 / 9;
+    max-height: 62vh;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -373,14 +383,20 @@
         <button class="btn icon" id="stepFwd" title="Next frame (→)" disabled>|▶</button>
       </div>
       <div class="group">
+        <span class="glabel">View</span>
+        <button class="speed-btn active" data-view="both">Both</button>
+        <button class="speed-btn" data-view="A" disabled>Swing A</button>
+        <button class="speed-btn" data-view="B" disabled>Swing B</button>
+      </div>
+      <div class="group">
         <span class="glabel">Speed</span>
         <button class="speed-btn" data-speed="0.25">0.25×</button>
         <button class="speed-btn" data-speed="0.5">0.5×</button>
         <button class="speed-btn active" data-speed="1">1×</button>
       </div>
       <div class="group">
-        <span class="glabel">Overlay</span>
-        <button class="speed-btn" id="overlayToggle" aria-pressed="false" disabled>Skeleton</button>
+        <span class="glabel">Pose</span>
+        <button class="speed-btn" id="overlayToggle" aria-pressed="false" title="Show/hide the body-tracking skeleton drawn over the video" disabled>Skeleton</button>
         <span id="poseStatus" class="pose-status">loading pose model…</span>
       </div>
       <div class="group">
@@ -403,7 +419,7 @@
   </div>
 
   <div class="roadmap">
-    <b>Overlay:</b> wrists, elbows, shoulders, hips &amp; knees are highlighted. <b>Detect flaws</b> scans each loaded swing for common faults — click a finding to jump to it and light up the joint in red.
+    <b>Skeleton:</b> the green overlay tracks your body joints (wrists, elbows, shoulders, hips &amp; knees highlighted) live as the video plays or steps — toggle it with the <b>Skeleton</b> button. <b>View:</b> switch to a single swing for a bigger picture. <b>Detect flaws</b> scans each loaded swing for common faults — click a finding to jump straight to it and light up the offending joint in red.
   </div>
 
   <div class="results" id="results"></div>
@@ -420,6 +436,7 @@ class Lane {
     this.id = rootEl.dataset.lane;
     this.stage = rootEl.querySelector('[data-stage]');
     this.video = rootEl.querySelector('[data-video]');
+    this.canvas = rootEl.querySelector('[data-overlay]');
     this.dropzone = rootEl.querySelector('[data-dropzone]');
     this.fileInput = rootEl.querySelector('[data-file]');
     this.fnameEl = rootEl.querySelector('[data-fname]');
@@ -457,8 +474,12 @@ class Lane {
 
     this.video.addEventListener('loadedmetadata', () => {
       this.ready = true;
+      const vw = this.video.videoWidth, vh = this.video.videoHeight;
+      // Size the stage to the video's true aspect ratio so portrait phone
+      // clips fill the frame instead of sitting in a tiny letterbox.
+      if (vw && vh) this.stage.style.aspectRatio = `${vw} / ${vh}`;
       this.dimsEl.textContent =
-        `${this.video.videoWidth}×${this.video.videoHeight} · ${formatTime(this.video.duration)}`;
+        `${vw}×${vh} · ${formatTime(this.video.duration)}`;
       onLaneReady();
     });
   }
@@ -492,29 +513,56 @@ const stepBack = document.getElementById('stepBack');
 const stepFwd = document.getElementById('stepFwd');
 const scrubber = document.getElementById('scrubber');
 const timeReadout = document.getElementById('timeReadout');
-const speedBtns = [...document.querySelectorAll('.speed-btn')];
+const speedBtns = [...document.querySelectorAll('.speed-btn[data-speed]')];
+const viewBtns = [...document.querySelectorAll('.speed-btn[data-view]')];
+const lanesEl = document.querySelector('.lanes');
 
 let speed = 1;
 let playing = false;
 let scrubbing = false;
+let focusLane = null; // null = both; otherwise the single focused Lane
 
 const loadedLanes = () => lanes.filter(l => l.ready);
+// The lanes the transport (play/seek/step/scrubber) currently drives.
+const controlLanes = () =>
+  (focusLane && focusLane.ready) ? [focusLane] : loadedLanes();
 const maxDuration = () =>
-  Math.max(0, ...loadedLanes().map(l => l.video.duration || 0));
+  Math.max(0, ...controlLanes().map(l => l.video.duration || 0));
 const masterTime = () =>
-  Math.max(0, ...loadedLanes().map(l => l.video.currentTime || 0));
+  Math.max(0, ...controlLanes().map(l => l.video.currentTime || 0));
 
 function onLaneReady() {
   const any = loadedLanes().length > 0;
   [playBtn, restartBtn, stepBack, stepFwd].forEach(b => b.disabled = !any);
   scrubber.disabled = !any;
   loadedLanes().forEach(l => l.video.playbackRate = speed);
+  refreshViewBtns();
   if (typeof refreshAnalyzeBtn === 'function') refreshAnalyzeBtn();
   updateUI();
 }
 
+function refreshViewBtns() {
+  for (const b of viewBtns) {
+    if (b.dataset.view === 'both') continue;
+    const l = lanes.find(x => x.id === b.dataset.view);
+    b.disabled = !(l && l.ready);
+  }
+}
+
+function setFocus(view) {
+  focusLane = (view === 'A' || view === 'B') ? lanes.find(l => l.id === view) : null;
+  lanesEl.classList.toggle('view-A', view === 'A');
+  lanesEl.classList.toggle('view-B', view === 'B');
+  viewBtns.forEach(b => b.classList.toggle('active', b.dataset.view === view));
+  // Layout changed → resize/redraw the overlay for the now-visible video.
+  requestAnimationFrame(() => {
+    lanes.forEach(l => l.detectAndDraw && l.detectAndDraw());
+    updateUI();
+  });
+}
+
 function play() {
-  const ls = loadedLanes();
+  const ls = controlLanes();
   if (!ls.length) return;
   playing = true;
   playBtn.textContent = '❚❚';
@@ -537,13 +585,13 @@ function pause() {
 function togglePlay() { playing ? pause() : play(); }
 
 function restart() {
-  loadedLanes().forEach(l => l.video.currentTime = 0);
+  controlLanes().forEach(l => l.video.currentTime = 0);
   if (!playing) updateUI();
 }
 
 function stepBy(frames) {
   pause();
-  loadedLanes().forEach(l => {
+  controlLanes().forEach(l => {
     const t = Math.min(
       Math.max(0, l.video.currentTime + frames * STEP),
       l.video.duration || 0
@@ -553,7 +601,7 @@ function stepBy(frames) {
 }
 
 function seekFraction(frac) {
-  loadedLanes().forEach(l => {
+  controlLanes().forEach(l => {
     l.video.currentTime = frac * (l.video.duration || 0);
   });
 }
@@ -577,7 +625,7 @@ function updateUI() {
 function tick() {
   if (playing) {
     const dur = maxDuration();
-    const allDone = loadedLanes().every(
+    const allDone = controlLanes().every(
       l => l.video.ended || l.video.currentTime >= (l.video.duration - 0.05)
     );
     if (allDone && dur > 0) pause();
@@ -593,6 +641,8 @@ restartBtn.addEventListener('click', restart);
 stepBack.addEventListener('click', () => stepBy(-1));
 stepFwd.addEventListener('click', () => stepBy(1));
 speedBtns.forEach(b => b.addEventListener('click', () => setSpeed(parseFloat(b.dataset.speed))));
+viewBtns.forEach(b => b.addEventListener('click', () => { if (!b.disabled) setFocus(b.dataset.view); }));
+window.addEventListener('resize', () => lanes.forEach(l => l.detectAndDraw && l.detectAndDraw()));
 
 scrubber.addEventListener('input', () => {
   scrubbing = true;
@@ -783,7 +833,6 @@ async function setupPose() {
     }
     poseReady = true;
     overlayToggle.disabled = false;
-    setStatus('ready', 'pose ready');
     refreshAnalyzeBtn();
     // On by default once available.
     setOverlay(true);
@@ -797,6 +846,7 @@ function setOverlay(on) {
   overlayOn = on;
   overlayToggle.classList.toggle('active', on);
   overlayToggle.setAttribute('aria-pressed', String(on));
+  if (poseReady) setStatus('ready', on ? 'skeleton on' : 'skeleton off');
   for (const lane of lanes) {
     if (on) lane.detectAndDraw && lane.detectAndDraw();
     else clearOverlay(lane);
@@ -1054,7 +1104,11 @@ const SEV_COLOR = { high: '#ef4444', med: '#f59e0b', low: '#eab308' };
 
 function seekLaneTo(lane, t) {
   pause();
+  // Focus this swing so the scrubber + time readout track *its* clock,
+  // not the longer of the two lanes (which made the time look wrong).
+  setFocus(lane.id);
   lane.video.currentTime = t;
+  updateUI();
 }
 
 function renderResults() {
