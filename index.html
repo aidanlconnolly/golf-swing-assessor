@@ -415,16 +415,23 @@
       <div class="group">
         <span class="glabel">Pose</span>
         <button class="speed-btn" id="overlayToggle" aria-pressed="false" title="Show/hide the body-tracking skeleton drawn over the video" disabled>Skeleton</button>
+        <button class="speed-btn" id="guidesToggle" aria-pressed="false" title="Show spine line, head-still guide and the hand-path arc (the arc &amp; head line appear after you detect flaws)" disabled>Guides</button>
         <span id="poseStatus" class="pose-status">loading pose model…</span>
       </div>
       <div class="group">
         <span class="glabel">Analyze</span>
+        <select id="cameraView" class="select" title="Camera angle — gates which flaws apply (down-the-line vs face-on)">
+          <option value="auto">Auto-detect view</option>
+          <option value="face">Face-on</option>
+          <option value="dtl">Down-the-line</option>
+        </select>
         <select id="handedness" class="select" title="Golfer handedness">
           <option value="R">Right-handed</option>
           <option value="L">Left-handed</option>
         </select>
         <button class="btn" id="analyzeBtn" disabled>Detect flaws</button>
         <button class="btn" id="compareBtn" disabled title="Analyze both swings and compare them side by side">Compare swings</button>
+        <button class="btn" id="exportBtn" disabled title="Save the analysis (timeline + flaws) as a PNG image">Save image</button>
         <span id="analyzeStatus" class="pose-status"></span>
       </div>
     </div>
@@ -484,7 +491,7 @@
   </div>
 
   <div class="roadmap">
-    <b>Skeleton:</b> the green overlay tracks your body joints (wrists, elbows, shoulders, hips &amp; knees highlighted) live as the video plays or steps — toggle it with the <b>Skeleton</b> button. <b>View:</b> switch to a single swing for a bigger picture. <b>Detect flaws</b> scans each loaded swing for ~16 common faults (overswing, over-the-top, early extension, sway, reverse pivot, head movement, casting-arm flaws, tempo &amp; more) — click a finding to jump to it and light up the offending joint in red. <b>Compare swings</b> analyzes both and lines them up side by side from address.
+    <b>Skeleton:</b> the green overlay tracks your body joints (wrists, elbows, shoulders, hips &amp; knees highlighted) live as the video plays or steps — toggle it with the <b>Skeleton</b> button. <b>Guides:</b> overlays the spine line, a head-still reference at address and the amber hand-path arc of the swing. <b>Camera:</b> pick Face-on or Down-the-line (or leave on Auto) — the flaw checks that only make sense from one angle are skipped for the other, cutting false positives. <b>Detect flaws</b> scans each loaded swing for common faults (overswing, over-the-top, early extension, sway, reverse pivot, head movement, casting-arm flaws, tempo &amp; more) — click a finding to jump to it and light up the offending joint in red. <b>Compare swings</b> analyzes both and lines them up side by side from address. <b>Save image</b> exports the findings as a PNG.
   </div>
 
   <div class="compare" id="compare"></div>
@@ -555,6 +562,10 @@ class Lane {
     if (this.url) URL.revokeObjectURL(this.url);
     this.url = URL.createObjectURL(file);
     this.ready = false;
+    // A new clip invalidates any prior analysis (frames are cached by URL).
+    this.frames = null; this.framesUrl = null; this.events = null;
+    this.flaws = null; this.handPath = null; this.addressHead = null;
+    this.detectedView = null;
     this.video.src = this.url;
     this.video.load();
     this.video.pause();
@@ -751,10 +762,12 @@ const EMPTY_SET = new Set();
 let POSE_CONNECTIONS = [];
 let poseReady = false;
 let overlayOn = false;
+let guidesOn = false;
 let _PoseLandmarker = null;   // class, kept for the IMAGE-mode analysis landmarker
 let _vision = null;           // shared FilesetResolver
 
 const overlayToggle = document.getElementById('overlayToggle');
+const guidesToggle = document.getElementById('guidesToggle');
 const poseStatus = document.getElementById('poseStatus');
 
 function setStatus(state, text) {
@@ -780,16 +793,26 @@ function drawPose(lane, res) {
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cw, ch);
-  if (!res || !res.landmarks || !res.landmarks.length) return;
 
-  const lm = res.landmarks[0];
   const vw = video.videoWidth, vh = video.videoHeight;
   if (!vw || !vh) return;
   // Map normalized coords onto the letterboxed (object-fit: contain) video rect.
   const scale = Math.min(cw / vw, ch / vh);
   const dw = vw * scale, dh = vh * scale;
   const ox = (cw - dw) / 2, oy = (ch - dh) / 2;
+  const mapN = (nx, ny) => ({ x: ox + nx * dw, y: oy + ny * dh });
+
+  // Reference guides (hand-path arc + head-still line) — static, from analysis.
+  if (guidesOn) drawStaticGuides(lane, ctx, mapN);
+
+  if (!res || !res.landmarks || !res.landmarks.length) return;
+  const lm = res.landmarks[0];
   const P = (i) => ({ x: ox + lm[i].x * dw, y: oy + lm[i].y * dh, v: lm[i].visibility ?? 1 });
+
+  // Live spine line — shown with guides even when the skeleton is hidden.
+  if (guidesOn) drawSpine(ctx, lm, P);
+
+  if (!overlayOn) return;
 
   // Skeleton connectors
   ctx.lineWidth = 3;
@@ -841,11 +864,52 @@ function clearOverlay(lane) {
   ctx.clearRect(0, 0, lane.canvas.width, lane.canvas.height);
 }
 
+// Static reference guides (need analysis): the amber hand-path arc traced across
+// the whole swing, and a dashed vertical "head-still" line at the address head.
+function drawStaticGuides(lane, ctx, mapN) {
+  if (lane.handPath && lane.handPath.length > 1) {
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = 'rgba(245,158,11,0.9)';
+    ctx.beginPath();
+    lane.handPath.forEach((p, i) => {
+      const q = mapN(p.x, p.y);
+      i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y);
+    });
+    ctx.stroke();
+  }
+  if (lane.addressHead) {
+    const top = mapN(lane.addressHead.x, 0), bot = mapN(lane.addressHead.x, 1);
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = 'rgba(120,170,255,0.55)';
+    ctx.setLineDash([6, 5]);
+    ctx.beginPath();
+    ctx.moveTo(top.x, top.y);
+    ctx.lineTo(bot.x, bot.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+// Live spine line from hip-center up through shoulder-center (slightly extended).
+function drawSpine(ctx, lm, P) {
+  if (!vis(lm, 11) || !vis(lm, 12) || !vis(lm, 23) || !vis(lm, 24)) return;
+  const sh = P(11), sh2 = P(12), h1 = P(23), h2 = P(24);
+  const shc = { x: (sh.x + sh2.x) / 2, y: (sh.y + sh2.y) / 2 };
+  const hpc = { x: (h1.x + h2.x) / 2, y: (h1.y + h2.y) / 2 };
+  const dx = shc.x - hpc.x, dy = shc.y - hpc.y;
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(120,170,255,0.75)';
+  ctx.beginPath();
+  ctx.moveTo(hpc.x, hpc.y);
+  ctx.lineTo(shc.x + dx * 0.4, shc.y + dy * 0.4);
+  ctx.stroke();
+}
+
 function attachOverlay(lane) {
   lane.flaggedJoints = new Set();
   let lastTs = -1;
   lane.detectAndDraw = () => {
-    if (!overlayOn || !poseReady || !lane.landmarker || !lane.ready) return;
+    if ((!overlayOn && !guidesOn) || !poseReady || !lane.landmarker || !lane.ready) return;
     if (lane.video.readyState < 2) return;
     let ts = performance.now();
     if (ts <= lastTs) ts = lastTs + 1;
@@ -905,6 +969,7 @@ async function setupPose() {
     }
     poseReady = true;
     overlayToggle.disabled = false;
+    guidesToggle.disabled = false;
     refreshAnalyzeBtn();
     // On by default once available.
     setOverlay(true);
@@ -920,20 +985,58 @@ function setOverlay(on) {
   overlayToggle.setAttribute('aria-pressed', String(on));
   if (poseReady) setStatus('ready', on ? 'skeleton on' : 'skeleton off');
   for (const lane of lanes) {
-    if (on) lane.detectAndDraw && lane.detectAndDraw();
+    if (on || guidesOn) lane.detectAndDraw && lane.detectAndDraw();
+    else clearOverlay(lane);
+  }
+}
+
+function setGuides(on) {
+  guidesOn = on;
+  guidesToggle.classList.toggle('active', on);
+  guidesToggle.setAttribute('aria-pressed', String(on));
+  for (const lane of lanes) {
+    if (on || overlayOn) lane.detectAndDraw && lane.detectAndDraw();
     else clearOverlay(lane);
   }
 }
 
 overlayToggle.addEventListener('click', () => { if (poseReady) setOverlay(!overlayOn); });
+guidesToggle.addEventListener('click', () => { if (poseReady) setGuides(!guidesOn); });
 
 // ---- Phase 3: swing analysis & flaw detection -------------------------------
 const analyzeBtn = document.getElementById('analyzeBtn');
 const compareBtn = document.getElementById('compareBtn');
+const exportBtn = document.getElementById('exportBtn');
 const analyzeStatus = document.getElementById('analyzeStatus');
 const handednessSel = document.getElementById('handedness');
+const cameraViewSel = document.getElementById('cameraView');
 const resultsEl = document.getElementById('results');
 const compareEl = document.getElementById('compare');
+
+// The effective camera view for a lane: the user's choice, or the auto-detected
+// view when set to "auto". Gates which flaw heuristics make sense for the angle.
+function effectiveView(lane) {
+  const sel = cameraViewSel.value;
+  if (sel === 'face' || sel === 'dtl') return sel;
+  return (lane && lane.detectedView) || 'face';
+}
+
+// Infer Face-on vs Down-the-line from the projected shoulder width relative to
+// torso length. Face-on shows the full shoulder span (wide); down-the-line the
+// shoulders point toward/away from camera, so their projected width collapses.
+function inferView(frames) {
+  if (!frames || !frames.length) return 'face';
+  const ratios = [];
+  for (const f of frames) {
+    const lm = f.lm;
+    if (!vis(lm, 11) || !vis(lm, 12)) continue;
+    ratios.push(dist(lm[11], lm[12]) / bodyScale(lm));
+  }
+  if (!ratios.length) return 'face';
+  ratios.sort((a, b) => a - b);
+  const med = ratios[Math.floor(ratios.length / 2)];
+  return med < 0.45 ? 'dtl' : 'face';
+}
 
 let analysisLandmarker = null; // IMAGE mode, created lazily, shared (analysis is sequential)
 let analyzing = false;
@@ -941,6 +1044,7 @@ let analyzing = false;
 function refreshAnalyzeBtn() {
   analyzeBtn.disabled = analyzing || !poseReady || loadedLanes().length === 0;
   compareBtn.disabled = analyzing || !poseReady || loadedLanes().length < 2;
+  exportBtn.disabled = analyzing || !lanes.some(l => l.ready && l.events);
 }
 
 // --- geometry helpers ---
@@ -958,11 +1062,21 @@ const bodyScale = (lm) => Math.max(dist(mid(lm[11], lm[12]), mid(lm[23], lm[24])
 
 function seekTo(video, t) {
   return new Promise((resolve) => {
+    // Already there? Setting currentTime wouldn't fire 'seeked', so resolve now.
+    if (Math.abs(video.currentTime - t) < 1e-3) { resolve(); return; }
     let done = false;
-    const finish = () => { if (done) return; done = true; video.removeEventListener('seeked', finish); resolve(); };
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      video.removeEventListener('seeked', finish);
+      resolve();
+    };
+    // Prefer the real 'seeked' event; a generous safety timeout covers the rare
+    // case it never fires (so capture can't hang), without racing a slow decode.
+    const timer = setTimeout(finish, 800);
     video.addEventListener('seeked', finish);
     video.currentTime = t;
-    setTimeout(finish, 250); // fallback if 'seeked' doesn't fire (already at t)
   });
 }
 
@@ -1000,9 +1114,15 @@ async function analyzeAll() {
   }
 
   for (const lane of targets) {
-    await captureFrames(lane);
+    // Frame capture is the slow part (one seek + detect per frame). Reuse a
+    // previous capture when the same clip is still loaded.
+    if (!(lane.frames && lane.framesUrl === lane.url)) {
+      await captureFrames(lane);
+    }
     lane.events = detectEvents(lane.frames);
+    lane.detectedView = inferView(lane.frames);
     lane.flaws = detectFlaws(lane);
+    buildGuides(lane);
     renderResults();
   }
 
@@ -1012,6 +1132,23 @@ async function analyzeAll() {
   refreshAnalyzeBtn();
   if (compareEl.children.length) renderCompare();
   if (!overlayOn) setOverlay(true);
+  if (!guidesOn) setGuides(true);
+}
+
+// Build the static overlay guides (hand-path arc + head-still anchor) for a lane
+// from its captured frames, spanning address → follow-through.
+function buildGuides(lane) {
+  const frames = lane.frames, ev = lane.events;
+  if (!frames || !ev) { lane.handPath = null; lane.addressHead = null; return; }
+  const path = [];
+  const end = Math.min(ev.follow.idx, frames.length - 1);
+  for (let i = ev.address.idx; i <= end; i++) {
+    const lm = frames[i].lm;
+    if (vis(lm, 15) && vis(lm, 16)) path.push(mid(lm[15], lm[16]));
+  }
+  lane.handPath = path.length > 1 ? path : null;
+  const al = frames[ev.address.idx] && frames[ev.address.idx].lm;
+  lane.addressHead = (al && vis(al, 0)) ? { x: al[0].x, y: al[0].y } : null;
 }
 
 async function captureFrames(lane) {
@@ -1021,9 +1158,13 @@ async function captureFrames(lane) {
   const maxFrames = 150;
   let step = 1 / FPS;
   if (dur / step > maxFrames) step = dur / maxFrames;
+  const total = Math.max(1, Math.floor(dur / step) + 1);
   const frames = [];
+  let i = 0;
   for (let t = 0; t <= dur + 1e-3; t += step) {
     await seekTo(v, Math.min(t, dur));
+    i++;
+    analyzeStatus.textContent = `Swing ${lane.id}: frame ${i}/${total}`;
     let res;
     try { res = analysisLandmarker.detect(v); } catch (e) { continue; }
     if (res && res.landmarks && res.landmarks.length) {
@@ -1031,12 +1172,23 @@ async function captureFrames(lane) {
     }
   }
   lane.frames = frames;
+  lane.framesUrl = lane.url; // cache token: reuse this capture while the clip is loaded
 }
 
 // --- swing event detection (address / top / impact / follow-through) ---
 function detectEvents(frames) {
   if (!frames || frames.length < 4) return null;
-  const hand = frames.map(f => mid(f.lm[15], f.lm[16])); // wrist midpoint
+  const handRaw = frames.map(f => mid(f.lm[15], f.lm[16])); // wrist midpoint
+  // BlazePose is jittery frame-to-frame; a 3-tap moving average steadies the
+  // trajectory so impact (peak speed) and top (min y) aren't set by one noisy frame.
+  const hand = handRaw.map((_, i) => {
+    let sx = 0, sy = 0, c = 0;
+    for (let k = -1; k <= 1; k++) {
+      const j = i + k;
+      if (j >= 0 && j < handRaw.length) { sx += handRaw[j].x; sy += handRaw[j].y; c++; }
+    }
+    return { x: sx / c, y: sy / c };
+  });
   const n = frames.length;
   // Per-frame hand speed. A real swing is a short burst of motion (~1s) that's
   // usually surrounded by dead time (setup before, posing after). We isolate that
@@ -1096,6 +1248,10 @@ function detectFlaws(lane) {
   const flaws = [];
   const sides = SIDE[handednessSel.value === 'L' ? 'L' : 'R'];
   const lead = sides.lead, trail = sides.trail;
+  // Camera view gates which faults are measurable. Depth-axis faults (sway,
+  // weight shift, head-ahead) only read from face-on; plane faults (over-the-top,
+  // flying elbow) only from down-the-line. 'both' applies either way.
+  const view = effectiveView(lane);
 
   const at = (e) => frames[e.idx].lm;
   const lmA = at(ev.address), lmT = at(ev.top), lmI = at(ev.impact), lmF = at(ev.follow);
@@ -1116,7 +1272,7 @@ function detectFlaws(lane) {
     const overHead = (lmT[0].y - handMid(lmT).y) / scT;
     if (overHead > 0.05) add({ id: 'past-parallel', name: 'Club past parallel at top',
       detail: 'Hands swung above head height at the top — a sign of an overswing / shaft past parallel.',
-      t: ev.top.t, joints: [lead.wr, lead.el, 15, 16], severity: overHead > 0.25 ? 'high' : 'med' });
+      t: ev.top.t, joints: [lead.wr, lead.el, 15, 16], view: 'both', severity: overHead > 0.25 ? 'high' : 'med' });
   }
 
   // 2) Over-the-top transition — hands thrown outward toward the target line early.
@@ -1128,7 +1284,7 @@ function detectFlaws(lane) {
     const deviation = (handE.x - lerpX) * targetDir / scT;
     if (deviation > 0.06) add({ id: 'over-the-top', name: 'Over-the-top downswing',
       detail: 'Hands shifted out toward the target line early in transition instead of dropping inside.',
-      t: frames[eIdx].t, joints: [11, 12, lead.wr], severity: deviation > 0.12 ? 'high' : 'med' });
+      t: frames[eIdx].t, joints: [11, 12, lead.wr], view: 'dtl', severity: deviation > 0.12 ? 'high' : 'med' });
   }
 
   // 3) Early extension — hips push toward the ball / stand up through impact.
@@ -1136,7 +1292,7 @@ function detectFlaws(lane) {
     const rise = (hip(lmA).y - hip(lmI).y) / scA;
     if (rise > 0.06) add({ id: 'early-extension', name: 'Early extension',
       detail: 'Hips pushed up / toward the ball through impact rather than holding posture.',
-      t: ev.impact.t, joints: [23, 24], severity: rise > 0.12 ? 'high' : 'med' });
+      t: ev.impact.t, joints: [23, 24], view: 'both', severity: rise > 0.12 ? 'high' : 'med' });
   }
 
   // 4) Lateral sway — pelvis slides away from the target in the backswing.
@@ -1144,7 +1300,7 @@ function detectFlaws(lane) {
     const away = (hip(lmA).x - hip(lmT).x) * targetDir / scA; // >0 ⇒ hips moved away from target
     if (away > 0.16) add({ id: 'sway', name: 'Lateral sway in backswing',
       detail: 'Hips slid away from the target during the backswing instead of rotating in place.',
-      t: ev.top.t, joints: [23, 24], severity: away > 0.28 ? 'high' : 'med' });
+      t: ev.top.t, joints: [23, 24], view: 'face', severity: away > 0.28 ? 'high' : 'med' });
   }
 
   // 5) Reverse pivot — upper body leans toward the target at the top.
@@ -1152,7 +1308,7 @@ function detectFlaws(lane) {
     const lean = (sho(lmT).x - hip(lmT).x) * targetDir / scT; // >0 ⇒ shoulders on target side of hips
     if (lean > 0.12) add({ id: 'reverse-pivot', name: 'Reverse pivot',
       detail: 'Upper body tilted toward the target at the top (weight on the lead side) instead of loading behind the ball.',
-      t: ev.top.t, joints: [11, 12, 23, 24], severity: lean > 0.22 ? 'high' : 'med' });
+      t: ev.top.t, joints: [11, 12, 23, 24], view: 'face', severity: lean > 0.22 ? 'high' : 'med' });
   }
 
   // 6) Head sway — the head drifts laterally off the ball during the backswing.
@@ -1160,7 +1316,7 @@ function detectFlaws(lane) {
     const move = Math.abs(lmT[0].x - lmA[0].x) / scA;
     if (move > 0.16) add({ id: 'head-sway', name: 'Head sways off the ball',
       detail: 'The head drifted sideways during the backswing — a steadier head improves consistency of contact.',
-      t: ev.top.t, joints: [0], severity: move > 0.28 ? 'high' : 'med' });
+      t: ev.top.t, joints: [0], view: 'face', severity: move > 0.28 ? 'high' : 'med' });
   }
 
   // 7) Loss of width — lead arm folds at the top.
@@ -1168,7 +1324,7 @@ function detectFlaws(lane) {
     const a = angleAt(lmT[lead.el], lmT[lead.sh], lmT[lead.wr]);
     if (a < 150) add({ id: 'lead-arm-bent', name: 'Bent lead arm at top (lost width)',
       detail: `Lead arm folded (~${Math.round(a)}°) at the top, collapsing the swing's width and radius.`,
-      t: ev.top.t, joints: [lead.el, lead.wr], severity: a < 125 ? 'high' : 'med' });
+      t: ev.top.t, joints: [lead.el, lead.wr], view: 'both', severity: a < 125 ? 'high' : 'med' });
   }
 
   // 8) Flying trail elbow — trail elbow lifts up/away from the body at the top.
@@ -1176,7 +1332,7 @@ function detectFlaws(lane) {
     const lift = (lmT[trail.sh].y - lmT[trail.el].y) / scT; // >0 ⇒ elbow above shoulder
     if (lift > 0.05) add({ id: 'flying-elbow', name: 'Flying trail elbow',
       detail: 'The trail elbow lifted up and away from the body at the top instead of staying connected.',
-      t: ev.top.t, joints: [trail.el], severity: lift > 0.15 ? 'high' : 'med' });
+      t: ev.top.t, joints: [trail.el], view: 'dtl', severity: lift > 0.15 ? 'high' : 'med' });
   }
 
   // 9) Standing up — hips/torso lift out of posture during the backswing.
@@ -1184,7 +1340,7 @@ function detectFlaws(lane) {
     const up = (hip(lmA).y - hip(lmT).y) / scA; // >0 ⇒ hips rose
     if (up > 0.08) add({ id: 'backswing-standup', name: 'Standing up in the backswing',
       detail: 'Hips/torso lifted out of posture during the backswing, raising the swing’s low point.',
-      t: ev.top.t, joints: [23, 24], severity: up > 0.16 ? 'high' : 'med' });
+      t: ev.top.t, joints: [23, 24], view: 'both', severity: up > 0.16 ? 'high' : 'med' });
   }
 
   // 10) Lateral slide — pelvis slides past the lead foot in the downswing.
@@ -1192,7 +1348,7 @@ function detectFlaws(lane) {
     const pastFoot = (hip(lmI).x - lmI[lead.ank].x) * targetDir / scI;
     if (pastFoot > 0.05) add({ id: 'hip-slide', name: 'Lateral slide in downswing',
       detail: 'Hips slid toward the target past the lead foot instead of rotating around it.',
-      t: ev.impact.t, joints: [23, 24, lead.ank], severity: pastFoot > 0.15 ? 'high' : 'med' });
+      t: ev.impact.t, joints: [23, 24, lead.ank], view: 'face', severity: pastFoot > 0.15 ? 'high' : 'med' });
   }
 
   // 11) Hanging back — weight stays on the trail side at impact.
@@ -1200,7 +1356,7 @@ function detectFlaws(lane) {
     const shift = (hip(lmI).x - hip(lmA).x) * targetDir / scA; // >0 ⇒ shifted toward target
     if (shift < -0.05) add({ id: 'hanging-back', name: 'Hanging back (no weight shift)',
       detail: 'Hips stayed on the trail side through impact rather than shifting toward the target.',
-      t: ev.impact.t, joints: [23, 24], severity: shift < -0.12 ? 'high' : 'med' });
+      t: ev.impact.t, joints: [23, 24], view: 'face', severity: shift < -0.12 ? 'high' : 'med' });
   }
 
   // 12) Head ahead of the ball at impact.
@@ -1208,7 +1364,7 @@ function detectFlaws(lane) {
     const ahead = (lmI[0].x - lmA[0].x) * targetDir / scA;
     if (ahead > 0.12) add({ id: 'head-ahead', name: 'Head ahead of the ball at impact',
       detail: 'The head moved toward the target ahead of the ball at impact instead of staying behind it.',
-      t: ev.impact.t, joints: [0], severity: ahead > 0.22 ? 'high' : 'med' });
+      t: ev.impact.t, joints: [0], view: 'face', severity: ahead > 0.22 ? 'high' : 'med' });
   }
 
   // 13) Chicken wing — lead elbow stays bent through the follow-through.
@@ -1216,7 +1372,7 @@ function detectFlaws(lane) {
     const a = angleAt(lmF[lead.el], lmF[lead.sh], lmF[lead.wr]);
     if (a < 150) add({ id: 'chicken-wing', name: 'Chicken-wing follow-through',
       detail: `Lead arm stayed bent (~${Math.round(a)}°) past impact instead of extending.`,
-      t: ev.follow.t, joints: [lead.el, lead.wr], severity: a < 120 ? 'high' : 'med' });
+      t: ev.follow.t, joints: [lead.el, lead.wr], view: 'both', severity: a < 120 ? 'high' : 'med' });
   }
 
   // 14) Incomplete finish — hands never reach above shoulder height.
@@ -1224,7 +1380,7 @@ function detectFlaws(lane) {
     const below = (handMid(lmF).y - sho(lmF).y) / scF; // >0 ⇒ hands below shoulder line
     if (below > 0.05) add({ id: 'incomplete-finish', name: 'Incomplete follow-through',
       detail: 'Hands never climbed above shoulder height into a full finish — often a sign of deceleration or quitting on the shot.',
-      t: ev.follow.t, joints: [15, 16], severity: below > 0.25 ? 'high' : 'med' });
+      t: ev.follow.t, joints: [15, 16], view: 'both', severity: below > 0.25 ? 'high' : 'med' });
   }
 
   // 15) Excessive head movement across the whole swing.
@@ -1234,7 +1390,7 @@ function detectFlaws(lane) {
     const range = Math.max(maxx - minx, maxy - miny) / scA;
     if (range > 0.5) add({ id: 'head-movement', name: 'Excessive head movement',
       detail: 'The head travelled a long way through the swing — quieter head motion improves strike consistency.',
-      t: ev.top.t, joints: [0], severity: range > 0.8 ? 'high' : 'med' });
+      t: ev.top.t, joints: [0], view: 'both', severity: range > 0.8 ? 'high' : 'med' });
   }
 
   // 16) Rushed transition — backswing-to-downswing tempo much quicker than ~3:1.
@@ -1243,10 +1399,22 @@ function detectFlaws(lane) {
     const ratio = backT / downT;
     if (ratio < 1.6) add({ id: 'quick-tempo', name: 'Rushed transition (quick tempo)',
       detail: `Backswing-to-downswing tempo is ~${ratio.toFixed(1)}:1 — quicker than the ~3:1 of most tour swings, which can hurt sequencing.`,
-      t: ev.top.t, joints: [15, 16], severity: ratio < 1.1 ? 'high' : 'low' });
+      t: ev.top.t, joints: [15, 16], view: 'both', severity: ratio < 1.1 ? 'high' : 'low' });
   }
 
-  return flaws;
+  // Keep only faults the camera angle can actually measure.
+  return flaws.filter(f => f.view === 'both' || f.view === view);
+}
+
+// Fraction of captured frames where the joints the heuristics rely on are
+// confidently tracked. Drives the "low tracking quality" warning.
+function trackingQuality(frames) {
+  if (!frames || !frames.length) return 0;
+  let good = 0;
+  for (const f of frames) {
+    if (KEY_JOINTS.every(i => vis(f.lm, i))) good++;
+  }
+  return good / frames.length;
 }
 
 // Summary metrics used by the side-by-side comparison.
@@ -1278,9 +1446,21 @@ function renderResults() {
     const card = document.createElement('div');
     card.className = 'result-card';
 
+    const viewLabel = effectiveView(lane) === 'dtl' ? 'down-the-line' : 'face-on';
+    const auto = cameraViewSel.value === 'auto' ? ' · auto' : '';
     const h = document.createElement('h3');
-    h.textContent = `Swing ${lane.id} — analysis`;
+    h.textContent = `Swing ${lane.id} — analysis · ${viewLabel}${auto}`;
     card.appendChild(h);
+
+    // Warn when pose tracking was poor, so confident-looking flaws aren't trusted blindly.
+    const q = trackingQuality(lane.frames);
+    if (q < 0.6) {
+      const warn = document.createElement('div');
+      warn.className = 'disclaimer';
+      warn.style.color = 'var(--danger)';
+      warn.textContent = `⚠ Low pose-tracking quality (${Math.round(q * 100)}% of frames clean). Findings here are less reliable — try a clip with the full body in frame, good lighting, and snug clothing.`;
+      card.appendChild(warn);
+    }
 
     // Swing timeline chips
     const tl = document.createElement('div');
@@ -1420,10 +1600,9 @@ async function compareSwings() {
   compareEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-analyzeBtn.addEventListener('click', analyzeAll);
-compareBtn.addEventListener('click', compareSwings);
-handednessSel.addEventListener('change', () => {
-  // Re-grade already-captured swings with the new lead side.
+// Re-grade already-captured swings (cheap — no re-capture) when the lead side
+// or camera view changes.
+function regrade() {
   let any = false;
   for (const lane of lanes) {
     if (lane.frames && lane.events) { lane.flaws = detectFlaws(lane); any = true; }
@@ -1432,7 +1611,100 @@ handednessSel.addEventListener('change', () => {
     renderResults();
     if (compareEl.children.length) renderCompare();
   }
-});
+}
+
+analyzeBtn.addEventListener('click', analyzeAll);
+compareBtn.addEventListener('click', compareSwings);
+exportBtn.addEventListener('click', exportImage);
+handednessSel.addEventListener('change', regrade);
+cameraViewSel.addEventListener('change', regrade);
+
+// ---- Export findings as a PNG -----------------------------------------------
+function exportImage() {
+  const graded = lanes.filter(l => l.ready && l.events);
+  if (!graded.length) return;
+  const W = 900, pad = 28, colGap = 28;
+  const colW = graded.length > 1 ? (W - pad * 2 - colGap) / 2 : W - pad * 2;
+  const lh = 20;
+
+  // First pass: measure wrapped text so the canvas is tall enough.
+  const meas = document.createElement('canvas').getContext('2d');
+  const wrap = (text, font, maxW) => {
+    meas.font = font;
+    const words = text.split(' ');
+    const lines = [];
+    let line = '';
+    for (const w of words) {
+      const test = line ? line + ' ' + w : w;
+      if (meas.measureText(test).width > maxW && line) { lines.push(line); line = w; }
+      else line = test;
+    }
+    if (line) lines.push(line);
+    return lines;
+  };
+
+  const colHeight = (lane) => {
+    let y = 0;
+    y += 26;                                   // "Swing X — view"
+    y += 22;                                   // timeline line
+    const flaws = lane.flaws || [];
+    if (!flaws.length) { y += lh; }
+    for (const f of flaws) {
+      y += 20;                                 // name
+      y += wrap(f.detail, '12px sans-serif', colW - 22).length * 16 + 10;
+    }
+    return y;
+  };
+  const bodyH = Math.max(...graded.map(colHeight), 40);
+  const H = pad + 64 + bodyH + 40;
+  const dpr = 2;
+  const cv = document.createElement('canvas');
+  cv.width = W * dpr; cv.height = H * dpr;
+  const ctx = cv.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  // Background + header
+  ctx.fillStyle = '#0d1117'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#e6edf3'; ctx.font = '700 22px sans-serif';
+  ctx.fillText('⛳ Golf Swing Assessor — analysis', pad, pad + 22);
+  ctx.fillStyle = '#8b97a7'; ctx.font = '12px sans-serif';
+  ctx.fillText('Heuristic, pose-only estimates — the club isn’t tracked and a single camera angle limits accuracy.', pad, pad + 44);
+
+  const SEVC = { high: '#ef4444', med: '#f59e0b', low: '#eab308' };
+  graded.forEach((lane, ci) => {
+    let x = pad + ci * (colW + colGap);
+    let y = pad + 64;
+    const view = effectiveView(lane) === 'dtl' ? 'down-the-line' : 'face-on';
+    ctx.fillStyle = '#e6edf3'; ctx.font = '700 15px sans-serif';
+    ctx.fillText(`Swing ${lane.id} · ${view}`, x, y); y += 24;
+    ctx.fillStyle = '#8b97a7'; ctx.font = '12px sans-serif';
+    const ev = lane.events;
+    ctx.fillText(`Address ${formatTime(ev.address.t)}  ·  Top ${formatTime(ev.top.t)}  ·  Impact ${formatTime(ev.impact.t)}  ·  Finish ${formatTime(ev.follow.t)}`, x, y);
+    y += 22;
+    const flaws = lane.flaws || [];
+    if (!flaws.length) {
+      ctx.fillStyle = '#2ec16b'; ctx.font = '13px sans-serif';
+      ctx.fillText('✓ No common flaws detected.', x, y); y += lh;
+    }
+    for (const f of flaws) {
+      ctx.fillStyle = SEVC[f.severity] || SEVC.med;
+      ctx.beginPath(); ctx.arc(x + 4, y - 4, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#e6edf3'; ctx.font = '600 13px sans-serif';
+      ctx.fillText(`${f.name}  (${formatTime(f.t)})`, x + 14, y); y += 18;
+      ctx.fillStyle = '#8b97a7'; ctx.font = '12px sans-serif';
+      for (const ln of wrap(f.detail, '12px sans-serif', colW - 22)) { ctx.fillText(ln, x + 14, y); y += 16; }
+      y += 10;
+    }
+  });
+
+  cv.toBlob((blob) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'swing-analysis.png';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }, 'image/png');
+}
 
 setupPose();
 </script>
